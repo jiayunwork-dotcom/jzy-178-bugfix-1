@@ -1,0 +1,118 @@
+{
+  "clean_baseline": {
+    "combined": {
+      "alert_episodes": 0,
+      "alert_epochs": 0,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": -1,
+      "raim_availability": 1,
+      "service_availability": 1,
+      "true_alarm_episodes": 0
+    },
+    "persistence": {
+      "alert_episodes": 0,
+      "alert_epochs": 0,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": -1,
+      "raim_availability": 1,
+      "service_availability": 1,
+      "true_alarm_episodes": 0
+    },
+    "snapshot": {
+      "alert_episodes": 3,
+      "alert_epochs": 3,
+      "false_alarm_episodes": 3,
+      "first_alert_delay_epochs": -1,
+      "raim_availability": 1,
+      "service_availability": 0.997,
+      "true_alarm_episodes": 0
+    }
+  },
+  "gross_fault": {
+    "combined": {
+      "alert_episodes": 1,
+      "alert_epochs": 13,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": 1,
+      "raim_availability": 1,
+      "service_availability": 0.675,
+      "true_alarm_episodes": 1
+    },
+    "persistence": {
+      "alert_episodes": 1,
+      "alert_epochs": 11,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": 3,
+      "raim_availability": 1,
+      "service_availability": 0.725,
+      "true_alarm_episodes": 1
+    },
+    "snapshot": {
+      "alert_episodes": 1,
+      "alert_epochs": 11,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": 1,
+      "raim_availability": 1,
+      "service_availability": 0.725,
+      "true_alarm_episodes": 1
+    }
+  },
+  "persistent_fault": {
+    "combined": {
+      "alert_episodes": 1,
+      "alert_epochs": 3,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": 6,
+      "raim_availability": 1,
+      "service_availability": 0.95,
+      "true_alarm_episodes": 1
+    },
+    "persistence": {
+      "alert_episodes": 1,
+      "alert_epochs": 3,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": 6,
+      "raim_availability": 1,
+      "service_availability": 0.95,
+      "true_alarm_episodes": 1
+    },
+    "snapshot": {
+      "alert_episodes": 3,
+      "alert_epochs": 5,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": 4,
+      "raim_availability": 1,
+      "service_availability": 0.9166666666666666,
+      "true_alarm_episodes": 3
+    }
+  },
+  "transient_spikes": {
+    "combined": {
+      "alert_episodes": 0,
+      "alert_epochs": 0,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": -1,
+      "raim_availability": 1,
+      "service_availability": 1,
+      "true_alarm_episodes": 0
+    },
+    "persistence": {
+      "alert_episodes": 0,
+      "alert_epochs": 0,
+      "false_alarm_episodes": 0,
+      "first_alert_delay_epochs": -1,
+      "raim_availability": 1,
+      "service_availability": 1,
+      "true_alarm_episodes": 0
+    },
+    "snapshot": {
+      "alert_episodes": 4,
+      "alert_epochs": 4,
+      "false_alarm_episodes": 4,
+      "first_alert_delay_epochs": -1,
+      "raim_availability": 1,
+      "service_availability": 0.996,
+      "true_alarm_episodes": 0
+    }
+  }
+}

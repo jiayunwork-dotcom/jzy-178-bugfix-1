@@ -1,0 +1,15 @@
+# 编译产物
+/raim-server
+*.out
+*.test
+
+# 本地运行数据（运行档与会话落盘目录，勿提交）
+/data/
+*.tmp
+
+# Go
+/vendor/
+
+# 编辑器/系统
+.DS_Store
+*.swp
