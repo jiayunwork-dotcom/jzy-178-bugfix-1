@@ -1,8 +1,10 @@
 // Package statem 实现跨历元的两类持续性状态：
 //
 //  1. 故障星隔离/恢复计数（卫星级）：
-//     被排除的星进入隔离；此后须连续 MinEpochs 个历元“本星残差正常且
-//     加回后整体检验通过”才解除。星不可见或任一条件不满足，计数清零重来。
+//     被排除的星进入隔离；此后须连续 MinEpochs 个历元通过恢复检验才解除。
+//     恢复检验由上层在“不含任何隔离星的干净基础解”上完成（单星新息检验 +
+//     加回后整体检验），多颗隔离星的检验彼此独立、互不掩护；星不可见或任一
+//     条件不满足（含不可评估），计数清零重来。同一历元多颗星都满足时一并解除。
 //
 //  2. 告警状态（系统级）：
 //     - snapshot：一个历元超限即告警，下一个历元正常即撤警；
@@ -44,7 +46,16 @@ func NewState() State {
 // SatRecovery 是上层对某颗隔离星在本历元的恢复评估结果。
 type SatRecovery struct {
 	ID     int
-	Normal bool // 本星残差正常 且 加回后整体检验通过
+	Normal bool // 本星新息检验通过 且 加回后整体检验通过
+
+	// 本历元的检验明细（供逐历元结果透明输出；不可评估时全为 0、Normal=false）：
+	SelfStat  float64 // 本星标准化新息 |innov|/σ_innov
+	SelfThr   float64 // 单星门限 √T_self
+	SelfPass  bool    // 本星新息检验是否通过
+	FullSSE   float64 // 把该星加回后的整体 SSE（由基础解 SSE 增量直接得到，不重解）
+	FullThr   float64 // 整体卡方门限 T_full（自由度基础星数−3）
+	FullPass  bool    // 加回后整体检验是否通过
+	Evaluable bool    // 本历元是否成功完成检验（基础解可解、冗余足够）
 }
 
 // UpdateIsolation 推进卫星隔离状态。

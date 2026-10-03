@@ -34,6 +34,16 @@ func sortedIsolated(isolated map[int]*statem.IsolationEntry, visible map[int]boo
 	return ids
 }
 
+// sortedKeys 返回 map 键的升序列表（保证逐历元输出顺序确定）。
+func sortedKeys(m map[int]lsq.Satellite) []int {
+	ids := make([]int, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
 // SatInput 是调用方提交的单星观测。
 type SatInput struct {
 	ID    int        `json:"id"`
@@ -81,7 +91,39 @@ type EpochRecord struct {
 	GoodStreak int  `json:"good_streak"`
 	RAIMAvail  bool `json:"raim_available"`
 
+	// 本历元每颗“可见且处于隔离”的星的恢复检验明细（含本历元刚被唯一排除的星）。
+	// 刚解除隔离的星不在此列（解除发生在本历元解算之后）。
+	IsolationTests []IsolationTest `json:"isolation_tests,omitempty"`
+
 	Reason string `json:"reason,omitempty"`
+}
+
+// IsolationTest 是一颗隔离星在某个历元的恢复检验明细。
+// 隔离期间逐历元输出，便于观察它为什么（还没）解除隔离。
+type IsolationTest struct {
+	ID int `json:"id"`
+	// Statistic 单星恢复检验统计量：不含该星的干净基础解上的标准化新息
+	// |innov|/σ_innov（预测再比，其他星的残差无法替它掩护）。
+	Statistic float64 `json:"statistic"`
+	// Threshold 单星门限（√T_self，与整体卡方门限一致的保守判据）。
+	Threshold float64 `json:"threshold"`
+	// SatPass 本星新息检验是否过门限。
+	SatPass bool `json:"sat_pass"`
+	// FullSSE 把该星加回后的整体加权残差平方和
+	// （等于基础解 SSE 加该星新息平方，由 SSE 增量恒等式直接给出，不重解）。
+	FullSSE float64 `json:"full_sse"`
+	// FullThreshold 加回后整体卡方门限（自由度为基础星数−3）。
+	FullThreshold float64 `json:"full_threshold"`
+	// FullPass 加回后整体检验是否通过。
+	FullPass bool `json:"full_pass"`
+	// Pass 综合判定：SatPass 且 FullPass。基础解无法完成检验时为 false。
+	Pass bool `json:"pass"`
+	// NormalStreak 本历元之后已连续正常（且可见）的历元数；攒够运行档
+	// isolation.min_epochs 即在下一历元解算前解除隔离。
+	NormalStreak int `json:"normal_streak"`
+	// Evaluable 本历元是否成功完成检验（基础解可解、冗余足够）。
+	// false 时统计量/门限为 0，按未通过处理、连续计数清零。
+	Evaluable bool `json:"evaluable"`
 }
 
 // Position 同时给出 ECEF 与经纬度高。
@@ -138,6 +180,20 @@ func (svc *Service) Profile(name string) (profile.Profile, bool) {
 	return p, ok
 }
 
+// SetIsolatedForTest 仅供测试：直接把若干星置入隔离集合并给定各自连续正常
+// 计数（streaks: 星编号 -> normal_streak），模拟“升级前/某历史时刻已隔离”的状态。
+func (s *Session) SetIsolatedForTest(streaks map[int]int, sinceSeq int) error {
+	if s.State.Isolated == nil {
+		s.State.Isolated = map[int]*statem.IsolationEntry{}
+	}
+	for id, streak := range streaks {
+		s.State.Isolated[id] = &statem.IsolationEntry{
+			ID: id, NormalStreak: streak, SinceEpochSeq: sinceSeq,
+		}
+	}
+	return nil
+}
+
 // NewSession 创建绑定运行档的会话。
 func (svc *Service) NewSession(id, profileName string) (*Session, error) {
 	if _, ok := svc.profiles[profileName]; !ok {
@@ -185,10 +241,13 @@ func (svc *Service) Step(sess *Session, in EpochInput) (*EpochRecord, error) {
 		HAL:         prof.HAL,
 	}
 
-	// 1) 活动星（剔除隔离星）
+	// 1) 活动星（剔除隔离星）。preIsolated 记录本历元解算前“可见且在隔离”的星：
+	// 它们既不参与本历元解，又是本历元恢复检验的评估对象。
+	preIsolated := map[int]bool{}
 	var active []lsq.Satellite
 	for _, s := range in.Sats {
 		if sess.State.Isolated[s.ID] != nil {
+			preIsolated[s.ID] = true
 			continue
 		}
 		active = append(active, toLSQSat(s))
@@ -197,21 +256,23 @@ func (svc *Service) Step(sess *Session, in EpochInput) (*EpochRecord, error) {
 	// 2) 单历元检测/排除
 	ep := &lsq.Epoch{Approx: approx, Sats: active}
 	if len(active) < 4 {
-		svc.fillUnusable(sess, prof, rec, "隔离后活动星不足 4 颗，无法定位", visible)
+		svc.fillUnusable(sess, prof, rec, "隔离后活动星不足 4 颗，无法定位", preIsolated)
 	} else {
 		a, err := detect.Assess(ep, detect.Options{Pfa: prof.Pfa})
 		if err != nil {
 			return nil, err
 		}
 		svc.fillFromAssessment(prof, rec, a)
-		// 3) 隔离星恢复评估（隔离期间仍逐历元算检验量）
-		recovery := svc.evalRecovery(prof, in, sess.State.Isolated, approx)
-		// 4) 推进隔离状态
+		// 3) 隔离星恢复评估：在“不含任何隔离星的干净基础解”上对每颗隔离星
+		//    做新息预测检验，各星的检验互不污染（另一只坏星无法替它掩护）。
 		newExcluded := 0
 		if rec.Mode == string(detect.ModeExcluded) {
 			newExcluded = rec.ExcludedID
 		}
+		recovery := svc.evalIsolation(prof, in, preIsolated, newExcluded, a)
+		// 4) 推进隔离状态（同一历元多颗星攒够历元时一并解除）
 		sess.State.UpdateIsolation(prof, newExcluded, recovery, visible, rec.Seq)
+		rec.IsolationTests = svc.attachIsolationTests(recovery, newExcluded, sess.State.Isolated)
 		// 5) 告警
 		svc.stepAlertAndStats(sess, prof, rec)
 	}
@@ -224,19 +285,18 @@ func (svc *Service) Step(sess *Session, in EpochInput) (*EpochRecord, error) {
 }
 
 func (svc *Service) fillUnusable(sess *Session, prof profile.Profile,
-	rec *EpochRecord, reason string, visible map[int]bool) {
+	rec *EpochRecord, reason string, preIsolated map[int]bool) {
 	rec.Mode = string(detect.ModeUnavailable)
 	rec.RAIMAvail = false
 	rec.Reason = reason
-	// 活动星不足时隔离计数仍按“不可见/无法评估”处理：可见性以原观测为准，
-	// 但恢复评估依赖定位，无法完成，故所有隔离星 streak 清零（Normal=false）。
-	var recovery []statem.SatRecovery
-	for id := range sess.State.Isolated {
-		if visible[id] {
-			recovery = append(recovery, statem.SatRecovery{ID: id, Normal: false})
-		}
+	// 活动星不足时无法定位、无法做恢复检验：所有可见隔离星按“不可评估”处理
+	// （Normal=false），连续计数清零。明细行在 attachIsolationTests 中按编号排序。
+	recovery := make([]statem.SatRecovery, 0, len(preIsolated))
+	for id := range preIsolated {
+		recovery = append(recovery, statem.SatRecovery{ID: id, Normal: false})
 	}
-	sess.State.UpdateIsolation(prof, 0, recovery, visible, rec.Seq)
+	sess.State.UpdateIsolation(prof, 0, recovery, preIsolated, rec.Seq)
+	rec.IsolationTests = svc.attachIsolationTests(recovery, 0, sess.State.Isolated)
 	svc.stepAlert(sess, prof, rec, statem.EpochStatus{
 		IntegrityAvailable: false, IntegrityBad: true,
 	})
@@ -360,54 +420,94 @@ func firstSatApprox(in EpochInput) geo.Vec {
 	return geo.Vec{X: geo.A, Y: 0, Z: 0}
 }
 
-// evalRecovery 对每个“当前隔离且本历元可见”的星做恢复评估：
-//   - 本星在含自身的全解中标准化残差正常；
-//   - 把它加回去后整体检验通过（SSE ≤ 阈值）。
+// evalIsolation 对每个“本历元可见、处于隔离”的星（含本历元刚被唯一排除的星）
+// 做恢复评估。评估基于本历元实际采用的“不含任何隔离星的干净基础解”：
 //
-// 两者同时满足才算一个恢复历元。
-func (svc *Service) evalRecovery(prof profile.Profile, in EpochInput,
-	isolated map[int]*statem.IsolationEntry, approx geo.Vec) []statem.SatRecovery {
-	if len(isolated) == 0 {
+//   - 单星检验：在不含该星的基础解上预测它的伪距，算标准化新息
+//     d=innov/σ_innov，要求 |d| ≤ √T_self（与整体卡方一致的保守单星门限）。
+//     预测没有把该星放进解，其他星（包括同时被隔离的别的坏星）的残差
+//     无法替它吸收偏差；
+//   - 整体检验：把该星加回后的全解 SSE 由加权 SSE 增量恒等式直接给出
+//     SSE_full = SSE_base + d²（不必重解，且全解也不含其他隔离星），
+//     要求 SSE_full ≤ T_full（自由度 基础星数−3）。
+//
+// 两者同时满足才算一个正常恢复历元。基础解无法评估（几何奇异、冗余不足）时
+// 对应星 Evaluable=false、Normal=false。
+func (svc *Service) evalIsolation(prof profile.Profile, in EpochInput,
+	preIsolated map[int]bool, newExcluded int, a *detect.Assessment) []statem.SatRecovery {
+
+	if len(preIsolated) == 0 && newExcluded == 0 {
 		return nil
 	}
-	all := make([]lsq.Satellite, 0, len(in.Sats))
-	byID := map[int]lsq.Satellite{}
+	cands := map[int]lsq.Satellite{}
 	for _, s := range in.Sats {
-		l := toLSQSat(s)
-		all = append(all, l)
-		byID[s.ID] = l
+		if preIsolated[s.ID] || s.ID == newExcluded {
+			cands[s.ID] = toLSQSat(s)
+		}
 	}
-	var out []statem.SatRecovery
-	for id := range isolated {
-		if _, ok := byID[id]; !ok {
-			continue // 不可见：上层 UpdateIsolation 会清零
+	if len(cands) == 0 {
+		return nil // 隔离星本历元均不可见
+	}
+
+	out := make([]statem.SatRecovery, 0, len(cands))
+	if a.Sol == nil {
+		// 基础解不存在（理论上 Assess 已报错；防御性处理为全部不可评估）
+		for _, id := range sortedKeys(cands) {
+			out = append(out, statem.SatRecovery{ID: id})
 		}
-		sol, err := lsq.Solve(&lsq.Epoch{Approx: approx, Sats: all})
-		if err != nil {
-			out = append(out, statem.SatRecovery{ID: id, Normal: false})
-			continue
-		}
-		sse, dof := lsq.WeightedSSE(sol.Resid, sol.Sigma)
-		overallPass := false
-		selfZ := 0.0
-		if dof > 0 {
-			thr := chisq.Threshold(dof, prof.Pfa)
-			overallPass = sse <= thr
-			for i, s := range all {
-				if s.ID == id {
-					selfZ = math.Abs(sol.Resid[i]) / s.Sigma
-					break
-				}
-			}
-			// 单星正常门限取 √thr（与整体卡方阈值一致的保守判据）
-			if overallPass && selfZ <= math.Sqrt(thr) {
-				out = append(out, statem.SatRecovery{ID: id, Normal: true})
-				continue
-			}
-		}
-		out = append(out, statem.SatRecovery{ID: id, Normal: false})
+		return out
+	}
+	baseSSE, _ := lsq.WeightedSSE(a.Sol.Resid, a.Sol.Sigma)
+	nBase := len(a.Sol.Resid)
+	fullDOF := nBase - 3 // 基础星数−4 自由度，加 1 颗后 +1
+	fullThr := chisq.Threshold(fullDOF, prof.Pfa)
+	selfThr := math.Sqrt(fullThr)
+
+	for _, id := range sortedKeys(cands) {
+		_, _, d := lsq.Innovation(a.Sol, cands[id])
+		selfStat := math.Abs(d)
+		selfPass := selfStat <= selfThr
+		fullSSE := baseSSE + d*d
+		fullPass := fullSSE <= fullThr
+		out = append(out, statem.SatRecovery{
+			ID: id, Normal: selfPass && fullPass,
+			SelfStat: selfStat, SelfThr: selfThr, SelfPass: selfPass,
+			FullSSE: fullSSE, FullThr: fullThr, FullPass: fullPass,
+			Evaluable: true,
+		})
 	}
 	return out
+}
+
+// attachIsolationTests 把本历元恢复评估结果转成逐历元明细输出。
+// 输出覆盖本历元所有“可见且处于隔离”的星：刚被排除的星 streak 为 0；
+// 本历元攒够历元而解除的星不在输出内（下一历元才重新可见为正常星）。
+// 行按星编号升序，保证批量/逐历元/重启续跑结果逐项一致。
+func (svc *Service) attachIsolationTests(recovery []statem.SatRecovery,
+	newExcluded int, isolated map[int]*statem.IsolationEntry) []IsolationTest {
+	rows := make([]IsolationTest, 0, len(recovery))
+	for _, r := range recovery {
+		if r.ID == newExcluded {
+			// 刚进入隔离：计数清零，本历元不算恢复历元
+			rows = append(rows, IsolationTest{
+				ID: r.ID, Statistic: r.SelfStat, Threshold: r.SelfThr, SatPass: r.SelfPass,
+				FullSSE: r.FullSSE, FullThreshold: r.FullThr, FullPass: r.FullPass,
+				Pass: false, NormalStreak: 0, Evaluable: r.Evaluable,
+			})
+			continue
+		}
+		e := isolated[r.ID]
+		if e == nil {
+			continue // 本历元已解除隔离：不再出现在隔离星明细中
+		}
+		rows = append(rows, IsolationTest{
+			ID: r.ID, Statistic: r.SelfStat, Threshold: r.SelfThr, SatPass: r.SelfPass,
+			FullSSE: r.FullSSE, FullThreshold: r.FullThr, FullPass: r.FullPass,
+			Pass: r.Normal, NormalStreak: e.NormalStreak, Evaluable: r.Evaluable,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	return rows
 }
 
 func toLSQSat(s SatInput) lsq.Satellite {

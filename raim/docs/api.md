@@ -52,11 +52,35 @@
   "clock_bias": 12.3, "iterations": 4, "converged": true,
   "sat_results": [{"id":1,"resid":0.2,"sigma":1.2,"stdres":0.16}],
   "trials": [{"excluded_id":1,"sse":40.1,"passes":false,"used":8}],
+  "isolation_tests": [
+    {"id":4,"statistic":0.8,"threshold":4.53,"sat_pass":true,
+     "full_sse":6.1,"full_threshold":20.5,"full_pass":true,
+     "pass":true,"normal_streak":2,"evaluable":true}
+  ],
   "alert": false, "bad_streak": 0, "good_streak": 1, "raim_available": true
 }
 ```
 
 `mode` ∈ `ok` / `unavailable`（<5 星）/ `detected`（检出无法排除或不唯一）/ `excluded`。
+
+`isolation_tests` 每历元为每颗“可见且处于隔离”的星（含本历元刚被唯一排除的星）
+输出一行；无隔离星时该字段省略。字段：
+
+| 字段 | 含义 |
+|---|---|
+| `statistic` | 单星恢复检验统计量：不含该星的干净基础解上的标准化新息 `|innov|/σ_innov`（预测再比，别的星残差无法替它掩护） |
+| `threshold` | 单星门限 `√T` |
+| `sat_pass` | 本星新息是否过门限 |
+| `full_sse` | 加回该星后的整体加权残差平方和（`SSE_base+statistic²`，SSE 增量恒等式，不重解） |
+| `full_threshold` | 加回后整体卡方门限（自由度 基础星数−3） |
+| `full_pass` | 加回后整体检验是否通过 |
+| `pass` | 综合判定（`sat_pass && full_pass`） |
+| `normal_streak` | 本历元后连续正常历元数；攒够运行档 `isolation.min_epochs` 即在下一历元解算前解除 |
+| `evaluable` | 本历元是否完成检验；基础解不可解/冗余不足为 false（数值记 0、计数清零） |
+
+同一历元多颗隔离星都攒够历元时一并解除；刚解除的星不出现在当历元
+`isolation_tests` 中，下一历元回到 `sat_results`。升级前写出的旧记录不含该字段，
+加载后续跑保持原样、不回填。
 
 ## 会话状态响应中的统计
 

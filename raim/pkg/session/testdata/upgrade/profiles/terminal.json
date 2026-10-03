@@ -1,0 +1,21 @@
+{
+  "name": "terminal",
+  "description": "终端区（Terminal）：HAL=1.0 nm",
+  "pfa": 0.00001,
+  "pmd": 0.001,
+  "hal": 1852,
+  "isolation": {
+    "min_epochs": 5
+  },
+  "alert": {
+    "mode": "combined",
+    "confirm_epochs": 3,
+    "clear_epochs": 3,
+    "gross_factor": 2
+  },
+  "sources": [
+    "ICAO Annex 10 Vol.I, GPS RAIM 终端区 HAL=1.0 NM",
+    "RTCA DO-208 (1991), §2",
+    "Kaplan \u0026 Hegarty (2017), Understanding GPS/GNSS: Principles and Applications, 3rd ed., Ch.11 (RAIM)"
+  ]
+}

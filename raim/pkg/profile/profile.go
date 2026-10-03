@@ -39,7 +39,8 @@ type Profile struct {
 
 // Isolation 是故障星隔离与恢复参数。
 type Isolation struct {
-	// MinEpochs 隔离后至少连续多少个历元“本星正常且加回后整体通过”才恢复。
+	// MinEpochs 隔离后至少连续多少个历元通过恢复检验（干净基础解上的
+	// 单星新息检验与加回后整体检验同时通过）才恢复。
 	MinEpochs int `json:"min_epochs"`
 }
 

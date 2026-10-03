@@ -363,6 +363,46 @@ func fillDOP(sol *Solution) {
 	sol.GDOP = math.Sqrt(math.Max(0, c[0][0]+c[1][1]+c[2][2]+inv[3][3]))
 }
 
+// NormalInverse 返回加权法方程逆阵 K=(GᵀWG)⁻¹（米²尺度），
+// 供恢复检验量（新息方差、SSE 增量）等几何计算复用。
+func (s *Solution) NormalInverse() [4][4]float64 {
+	return invert4(buildN(s))
+}
+
+// Innovation 在“不含候选星的基础解”上评估候选星：
+//
+//	新息 innov = PR_cand − (range(cand, 基础解位置) + 基础解钟差)
+//	sigma      = 候选星观测标准差
+//	d          = innov / σ_innov，σ_innov = σ·√(1 + gK gᵀ/σ²)
+//
+// 其中 g=[-ux,-uy,-uz,1] 为候选星在基础解位置处的几何行，K=(GᵀWG)⁻¹。
+// 预测不把候选星放进解，因此别的星的残差无法替它“吸收”偏差；
+// d 即把新息按其理论标准差归一化后的单星检验统计量。
+//
+// 加权 SSE 恒等式（基础解 SSE₀，nBase 颗星）：
+//
+//	把候选星加入后重解的全解 SSE = SSE₀ + d²
+//
+// 故无需重解即可得到“加回后整体检验”的统计量。
+func Innovation(base *Solution, cand Satellite) (innov, sigma, d float64) {
+	delta := geo.Sub(cand.Pos, base.Pos)
+	r := geo.Norm(delta)
+	ux, uy, uz := delta.X/r, delta.Y/r, delta.Z/r
+	g := [4]float64{-ux, -uy, -uz, 1}
+	innov = cand.PR - (r + base.ClockBias)
+	sigma = cand.Sigma
+	K := base.NormalInverse()
+	gKg := 0.0
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			gKg += g[i] * K[i][j] * g[j]
+		}
+	}
+	sd := sigma * math.Sqrt(math.Max(0, 1+gKg/(sigma*sigma)))
+	d = innov / sd
+	return
+}
+
 // WeightedSSE 返回加权残差平方和 Σ (r_i/σ_i)²，及自由度 n-4。
 func WeightedSSE(resid, sigma []float64) (float64, int) {
 	sse := 0.0

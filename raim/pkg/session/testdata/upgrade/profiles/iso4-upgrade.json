@@ -1,0 +1,16 @@
+{
+  "name": "iso4-upgrade",
+  "description": "升级兼容测试档：隔离恢复 4 历元",
+  "pfa": 0.001,
+  "pmd": 0.001,
+  "hal": 1000000000,
+  "isolation": {
+    "min_epochs": 4
+  },
+  "alert": {
+    "mode": "snapshot",
+    "confirm_epochs": 1,
+    "clear_epochs": 1
+  },
+  "sources": null
+}

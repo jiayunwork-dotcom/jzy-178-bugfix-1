@@ -175,3 +175,70 @@ func TestSSEMeanMatchesDOF(t *testing.T) {
 		t.Fatalf("SSE 均值 %v 与 dof %v 相对偏差超 5%%", mean, dof)
 	}
 }
+
+func TestInnovationSSEIncrementIdentity(t *testing.T) {
+	// 加权 SSE 恒等式：不含候选星的基础解 SSE_base + d² == 加回后重解的全解 SSE_full。
+	// 同时覆盖纯噪声与候选星带大偏差两种情形。
+	rec := sim.DefaultReceiver()
+	c := sim.EvenSky(rec, 10, 15, 5)
+	rng := rand.New(rand.NewSource(99))
+	check := func(biasID int, bias float64) {
+		t.Helper()
+		ep := c.Observe(sim.Obs{Rng: rng, Sigma: 1,
+			Bias: map[int]float64{biasID: bias}})
+		for drop := 0; drop < len(ep.Sats); drop++ {
+			cand := ep.Sats[drop]
+			baseSats := append(append([]lsq.Satellite(nil), ep.Sats[:drop]...), ep.Sats[drop+1:]...)
+			base, err := lsq.Solve(&lsq.Epoch{Approx: ep.Approx, Sats: baseSats})
+			if err != nil {
+				t.Fatal(err)
+			}
+			full, err := lsq.Solve(ep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sseBase, _ := lsq.WeightedSSE(base.Resid, base.Sigma)
+			sseFull, _ := lsq.WeightedSSE(full.Resid, full.Sigma)
+			_, _, d := lsq.Innovation(base, cand)
+			got := sseBase + d*d
+			if math.Abs(got-sseFull) > 1e-6*math.Max(1, sseFull) {
+				t.Fatalf("bias(id=%d)=%.0f drop=%d: SSE_base+d²=%.6f != SSE_full=%.6f",
+					biasID, bias, cand.ID, got, sseFull)
+			}
+		}
+	}
+	check(0, 0)  // 纯噪声
+	check(3, 80) // 候选星之一带 80 m 偏差
+}
+
+func TestInnovationDetectsBiasOnCleanBase(t *testing.T) {
+	// 坏星不在基础解里时，它的标准化新息必须直接暴露大偏差，
+	// 不能被基础解中其他星的残差“掩护”。
+	rec := sim.DefaultReceiver()
+	c := sim.EvenSky(rec, 10, 15, 5)
+	var big float64
+	for k := 0; k < 50; k++ {
+		ep := c.Observe(sim.Obs{
+			Rng:   rand.New(rand.NewSource(int64(1000 + k))),
+			Sigma: 1, Bias: map[int]float64{6: 80},
+		})
+		var baseSats []lsq.Satellite
+		var cand lsq.Satellite
+		for _, s := range ep.Sats {
+			if s.ID == 6 {
+				cand = s
+			} else {
+				baseSats = append(baseSats, s)
+			}
+		}
+		base, err := lsq.Solve(&lsq.Epoch{Approx: ep.Approx, Sats: baseSats})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, d := lsq.Innovation(base, cand)
+		big = math.Abs(d)
+		if big < 30 {
+			t.Fatalf("第 %d 个噪声实现：坏星标准化新息 |d|=%.1f，应明显暴露", k, big)
+		}
+	}
+}

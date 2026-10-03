@@ -1,0 +1,21 @@
+{
+  "name": "enroute",
+  "description": "航路（En-route）：HAL=2.0 nm，持续性窗口 + 恶劣立即告警",
+  "pfa": 0.00001,
+  "pmd": 0.001,
+  "hal": 3704,
+  "isolation": {
+    "min_epochs": 5
+  },
+  "alert": {
+    "mode": "combined",
+    "confirm_epochs": 3,
+    "clear_epochs": 3,
+    "gross_factor": 2
+  },
+  "sources": [
+    "ICAO Annex 10 Vol.I (Radio Navigation Aids), GPS RAIM 航路 HAL=2.0 NM",
+    "RTCA DO-208 (1991), Minimum Operational Performance Standards for Airborne Supplemental Navigation Equipment Using GPS, §2 RAIM 算法",
+    "Groves (2013), Principles of GNSS, Inertial, and Multisensor Integrated Navigation Systems, 2nd ed., Ch.17 (RAIM/FDE)"
+  ]
+}

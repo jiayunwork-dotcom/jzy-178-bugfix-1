@@ -1,0 +1,21 @@
+{
+  "name": "npa",
+  "description": "非精密进近（NPA）：HAL=0.3 nm",
+  "pfa": 0.00001,
+  "pmd": 0.001,
+  "hal": 556,
+  "isolation": {
+    "min_epochs": 5
+  },
+  "alert": {
+    "mode": "combined",
+    "confirm_epochs": 3,
+    "clear_epochs": 3,
+    "gross_factor": 2
+  },
+  "sources": [
+    "ICAO Annex 10 Vol.I / PBN Manual (Doc 9613), NPA HAL=0.3 NM",
+    "RTCA DO-208 (1991), §2",
+    "Groves (2013), Ch.17"
+  ]
+}
