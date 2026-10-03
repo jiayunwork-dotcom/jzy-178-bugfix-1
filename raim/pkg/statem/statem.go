@@ -1,8 +1,12 @@
 // Package statem 实现跨历元的两类持续性状态：
 //
 //  1. 故障星隔离/恢复计数（卫星级）：
-//     被排除的星进入隔离；此后须连续 MinEpochs 个历元“本星残差正常且
-//     加回后整体检验通过”才解除。星不可见或任一条件不满足，计数清零重来。
+//     被排除的星进入隔离；此后须连续 MinEpochs 个历元通过恢复检验
+//     （在不含本星、也不含其他隔离星的干净基线上的留一预测检验，
+//     且加回后整体检验通过）才具备放回资格。星不可见或任一历元不通过，
+//     计数清零重来；别的星被新排除不清零本星计数。多颗同历元攒满时，
+//     由上层 BeginEpoch/Qualifying/Release/ResetStreak 按“逐个放回、
+//     放回后整体复核”编排，本包不做 GNSS 计算。
 //
 //  2. 告警状态（系统级）：
 //     - snapshot：一个历元超限即告警，下一个历元正常即撤警；
@@ -13,7 +17,11 @@
 // 状态机本身不做任何 GNSS 计算，输入是上层算好的每历元事件，便于单测与复用。
 package statem
 
-import "raim/pkg/profile"
+import (
+	"sort"
+
+	"raim/pkg/profile"
+)
 
 // IsolationEntry 记录一颗隔离星的恢复计数。
 type IsolationEntry struct {
@@ -44,10 +52,91 @@ func NewState() State {
 // SatRecovery 是上层对某颗隔离星在本历元的恢复评估结果。
 type SatRecovery struct {
 	ID     int
-	Normal bool // 本星残差正常 且 加回后整体检验通过
+	Normal bool // 本星预测检验正常 且 加回后整体检验通过
 }
 
-// UpdateIsolation 推进卫星隔离状态。
+// SatEval 是上层对某颗隔离星在本历元的完整恢复评估（多星隔离用）。
+type SatEval struct {
+	ID     int
+	Normal bool    // 本星预测检验与加回后整体检验是否都通过
+	Z      float64 // 本星标准化预测检验量（留一解上的预测残差/预测误差标准差）
+}
+
+// BeginEpoch 推进一个历元的隔离状态：
+//
+//	excludedNow: 本历元新被唯一排除的星（0 表示无）——进入隔离，计数清零；
+//	evals:       对“此前已隔离且本历元可见”的星的逐星恢复评估；
+//	visible:     本历元可见星集合（隔离星不可见则计数清零）；
+//	seq:         历元序号（仅用于记录起始）。
+//
+// 本方法只推进计数，不解除任何星的隔离——是否放回由上层按
+// “同历元逐个放回、放回后整体复核”的策略调用 Release 决定，
+// 以保证几颗星同时攒满历时不会未经联合复核一起进解。
+//
+// 返回本历元仍处于隔离的星编号集合。
+func (s *State) BeginEpoch(prof profile.Profile, excludedNow int, evals []SatEval,
+	visible map[int]bool, seq int) map[int]bool {
+
+	if excludedNow != 0 && s.Isolated[excludedNow] == nil {
+		s.Isolated[excludedNow] = &IsolationEntry{ID: excludedNow, SinceEpochSeq: seq}
+	} else if excludedNow != 0 {
+		// 已在隔离中的星本历元又被唯一排除：计数清零、起始历元更新
+		e := s.Isolated[excludedNow]
+		e.NormalStreak = 0
+		e.SinceEpochSeq = seq
+	}
+	evalMap := map[int]SatEval{}
+	for _, e := range evals {
+		evalMap[e.ID] = e
+	}
+	still := map[int]bool{}
+	for id, e := range s.Isolated {
+		if id == excludedNow {
+			e.NormalStreak = 0
+			still[id] = true
+			continue
+		}
+		if !visible[id] {
+			e.NormalStreak = 0 // 不可见，连续性中断
+			still[id] = true
+			continue
+		}
+		if ev, ok := evalMap[id]; ok && ev.Normal {
+			e.NormalStreak++
+		} else {
+			e.NormalStreak = 0
+		}
+		// 计数达标不立即放回：由上层按逐个放回策略决定
+		still[id] = true
+	}
+	return still
+}
+
+// Qualifying 返回当前已连续正常达 MinEpochs 个历元、候选放回的星编号（升序）。
+func (s *State) Qualifying(prof profile.Profile) []int {
+	var ids []int
+	for id, e := range s.Isolated {
+		if e.NormalStreak >= prof.Isolation.MinEpochs {
+			ids = append(ids, id)
+		}
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// Release 把一颗星从隔离集合移除（本历元放回）。
+func (s *State) Release(id int) {
+	delete(s.Isolated, id)
+}
+
+// ResetStreak 把一颗隔离星的连续正常计数清零（放回后的联合复核）。
+func (s *State) ResetStreak(id int) {
+	if e, ok := s.Isolated[id]; ok {
+		e.NormalStreak = 0
+	}
+}
+
+// UpdateIsolation 推进卫星隔离状态（兼容单星接口：达标即放回）。
 //
 //	excludedNow: 本历元新被排除的星（0 表示无）——进入隔离，计数清零。
 //	recovery:   对当前已隔离且本历元可见的星的评估。
@@ -58,34 +147,17 @@ type SatRecovery struct {
 func (s *State) UpdateIsolation(prof profile.Profile, excludedNow int, recovery []SatRecovery,
 	visible map[int]bool, seq int) map[int]bool {
 
-	if excludedNow != 0 {
-		s.Isolated[excludedNow] = &IsolationEntry{ID: excludedNow, SinceEpochSeq: seq}
-	}
-	recMap := map[int]bool{}
+	evals := make([]SatEval, 0, len(recovery))
 	for _, r := range recovery {
-		recMap[r.ID] = r.Normal
+		evals = append(evals, SatEval{ID: r.ID, Normal: r.Normal})
 	}
-	still := map[int]bool{}
-	for id, e := range s.Isolated {
+	still := s.BeginEpoch(prof, excludedNow, evals, visible, seq)
+	for _, id := range s.Qualifying(prof) {
 		if id == excludedNow {
-			still[id] = true
 			continue
 		}
-		if !visible[id] {
-			e.NormalStreak = 0 // 不可见，连续性中断
-			still[id] = true
-			continue
-		}
-		if recMap[id] {
-			e.NormalStreak++
-		} else {
-			e.NormalStreak = 0
-		}
-		if e.NormalStreak >= prof.Isolation.MinEpochs {
-			delete(s.Isolated, id) // 满足恢复条件，解除隔离
-		} else {
-			still[id] = true
-		}
+		s.Release(id)
+		delete(still, id)
 	}
 	return still
 }

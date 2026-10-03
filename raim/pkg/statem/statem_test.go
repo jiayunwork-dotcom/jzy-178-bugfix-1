@@ -123,3 +123,61 @@ func TestIsolationInvisibleResetsStreak(t *testing.T) {
 		t.Fatal("不可见打断连续性，只连续 2 历元不应恢复")
 	}
 }
+
+func TestBeginEpochDoesNotReleaseQualifying(t *testing.T) {
+	s := statem.NewState()
+	p := profWith(profile.Persistence, 3, 2, 0)
+	vis := map[int]bool{5: true}
+	s.BeginEpoch(p, 5, nil, vis, 1)
+	for seq := 2; seq <= 4; seq++ {
+		still := s.BeginEpoch(p, 0,
+			[]statem.SatEval{{ID: 5, Normal: true}}, vis, seq)
+		if !still[5] {
+			t.Fatalf("seq=%d BeginEpoch 不应自行放回", seq)
+		}
+	}
+	if q := s.Qualifying(p); len(q) != 1 || q[0] != 5 {
+		t.Fatalf("攒满 3 历元后应出现在 Qualifying, got %v", q)
+	}
+	s.Release(5)
+	if len(s.Isolated) != 0 {
+		t.Fatal("Release 后应移出隔离集合")
+	}
+}
+
+func TestNewExclusionDoesNotResetOtherStreak(t *testing.T) {
+	// 星 5 已攒下 2 个恢复历元；星 7 在同一历元被唯一排除。
+	// BeginEpoch 不得把星 5 的计数清零（双星故障卡死问题的状态机层防线）。
+	s := statem.NewState()
+	p := profWith(profile.Persistence, 3, 2, 0)
+	vis := map[int]bool{5: true, 7: true}
+	s.BeginEpoch(p, 5, nil, vis, 1)
+	s.BeginEpoch(p, 0, []statem.SatEval{{ID: 5, Normal: true}}, vis, 2)
+	s.BeginEpoch(p, 0, []statem.SatEval{{ID: 5, Normal: true}}, vis, 3)
+	// 第 4 历元：星 7 被新排除，星 5 继续正常
+	s.BeginEpoch(p, 7, []statem.SatEval{{ID: 5, Normal: true}}, vis, 4)
+	if s.Isolated[5].NormalStreak != 3 {
+		t.Fatalf("新星被排除不应清零星 5 的计数, got %d", s.Isolated[5].NormalStreak)
+	}
+	if s.Isolated[7].NormalStreak != 0 {
+		t.Fatal("新排除星计数应为 0")
+	}
+}
+
+func TestResetStreakKeepsIsolated(t *testing.T) {
+	// 联合复核不过：ResetStreak 只清计数，不移出隔离集合。
+	s := statem.NewState()
+	p := profWith(profile.Persistence, 3, 2, 0)
+	vis := map[int]bool{5: true}
+	s.BeginEpoch(p, 5, nil, vis, 1)
+	for seq := 2; seq <= 4; seq++ {
+		s.BeginEpoch(p, 0, []statem.SatEval{{ID: 5, Normal: true}}, vis, seq)
+	}
+	s.ResetStreak(5)
+	if s.Isolated[5] == nil {
+		t.Fatal("ResetStreak 不应放回该星")
+	}
+	if s.Isolated[5].NormalStreak != 0 {
+		t.Fatalf("计数应清零, got %d", s.Isolated[5].NormalStreak)
+	}
+}

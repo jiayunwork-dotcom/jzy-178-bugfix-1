@@ -224,22 +224,15 @@ func solveNormal(G [][]float64, y, w []float64) ([]float64, error) {
 	return x, nil
 }
 
+// NormalInv 返回法方程矩阵的逆 (GᵀWG)^{-1}。
+// 供恢复评估计算“留一星预测残差”的方差（杠杆率 h=gᵀ(GᵀWG)^{-1}g/σ²）。
+func (s *Solution) NormalInv() [4][4]float64 {
+	return invert4(buildN(s))
+}
+
 // CovPos 返回 (GᵀWG)^{-1} 的左上角 3x3（位置协方差，单位按 sigma 尺度）。
 func (s *Solution) CovPos() [3][3]float64 {
-	m := 4
-	nRows := len(s.G)
-	N := make([][]float64, m)
-	for i := range N {
-		N[i] = make([]float64, m)
-	}
-	for k := 0; k < nRows; k++ {
-		for i := 0; i < m; i++ {
-			for j := 0; j < m; j++ {
-				N[i][j] += s.W[k] * s.G[k][i] * s.G[k][j]
-			}
-		}
-	}
-	inv := invert4(N)
+	inv := s.NormalInv()
 	var cov [3][3]float64
 	for i := 0; i < 3; i++ {
 		for j := 0; j < 3; j++ {

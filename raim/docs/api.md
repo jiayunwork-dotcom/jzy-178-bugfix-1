@@ -48,6 +48,11 @@
   "dof": 5, "chi_square_threshold": 20.515,
   "mode": "excluded",
   "sse": 64.2, "hpl": 10.7, "excluded_id": 4, "isolated": [4],
+  "isolation_checks": [
+    {"id": 4, "test_stat": 51.3, "self_threshold": 4.53,
+     "add_sse": 2631.8, "add_threshold": 20.52,
+     "passed": false, "normal_streak": 0}
+  ],
   "position": {"ecef":[...],"lon":116.39,"lat":39.90,"alt":50.1},
   "clock_bias": 12.3, "iterations": 4, "converged": true,
   "sat_results": [{"id":1,"resid":0.2,"sigma":1.2,"stdres":0.16}],
@@ -57,6 +62,25 @@
 ```
 
 `mode` ∈ `ok` / `unavailable`（<5 星）/ `detected`（检出无法排除或不唯一）/ `excluded`。
+
+### isolation_checks（隔离星逐历元恢复检验）
+
+每个历元对每颗**可见隔离星**单独输出一项（无隔离星时字段省略）：
+
+| 字段 | 含义 |
+|---|---|
+| `id` | 卫星编号 |
+| `test_stat` | 单星检验量：在“不含该星、也不含其他隔离星”的干净基线上预测其伪距，标准化预测残差 \|δ\|/√v |
+| `self_threshold` | 单星门限 √T（T 为加回解自由度 n−4 的卡方阈值） |
+| `add_sse` | 把该星加回基线后的整体加权残差平方和（=基线 SSE + test_stat²，与重解等价） |
+| `add_threshold` | 加回解卡方门限 T |
+| `passed` | 本历元是否通过（`test_stat ≤ self_threshold` 且 `add_sse ≤ add_threshold`） |
+| `normal_streak` | 截至本历元连续通过的历元数（不通过/不可见为 0） |
+
+本历元新被唯一排除的星也会出现（`normal_streak=0`、`passed=false`）；本历元刚
+决定放回的星保留放回前最后一次检验（`normal_streak ≥ min_epochs`）。`isolated`
+仍是“本历元解算后仍处隔离”的权威列表。检验在干净基线上进行，因此其他隔离星
+的残差不会替任何一颗掩护；多颗同历元攒满时逐个放回、放回后整体复核。
 
 ## 会话状态响应中的统计
 
